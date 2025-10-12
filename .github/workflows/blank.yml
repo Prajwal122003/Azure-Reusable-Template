@@ -1,0 +1,28 @@
+name: Deploy Azure VM
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy VM using Azure CLI
+        run: |
+          az group create --name myResourceGroup --location eastus
+          az vm create \
+            --resource-group myResourceGroup \
+            --name myVM \
+            --image UbuntuLTS \
+            --admin-username azureuser \
+            --generate-ssh-keys
