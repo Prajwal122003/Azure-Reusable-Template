@@ -1,0 +1,42 @@
+name: Control Azure VM
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Choose action: start or stop'
+        required: true
+        default: 'stop'
+        type: choice
+        options:
+          - start
+          - stop
+
+jobs:
+  control-vm:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        auth-type: SERVICE_PRINCIPAL
+
+    - name: Start or Stop VM
+      run: |
+        if [ "${{ github.event.inputs.action }}" == "start" ]; then
+          echo "Starting VM..."
+          az vm start --resource-group github-vm-rg --name github-vm
+        elif [ "${{ github.event.inputs.action }}" == "stop" ]; then
+          echo "Stopping VM..."
+          az vm stop --resource-group github-vm-rg --name github-vm
+        else
+          echo "Invalid action: ${{ github.event.inputs.action }}"
+          exit 1
+        fi
