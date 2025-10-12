@@ -32,5 +32,5 @@ jobs:
           --image Ubuntu2204 \
           --admin-username azureuser \
           --generate-ssh-keys \
-          --size Standard_D2s_v5
+          --size Standard_B1s
 
