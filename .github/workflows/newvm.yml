@@ -29,7 +29,8 @@ jobs:
         az vm create \
           --resource-group github-vm-rg \
           --name github-vm \
-          --image UbuntuLTS \
+          --image Ubuntu2204 \
           --admin-username azureuser \
           --generate-ssh-keys \
-          --size Standard_DS1_v2
+          --size Standard_D2s_v5
+
