@@ -25,7 +25,7 @@ jobs:
         auth-type: SERVICE_PRINCIPAL
 
     - name: Print encoded secret
-      run: echo "${{ secrets.AZURE_CLIENT_ID }}" | base64
+      run: echo "${{ secrets.AZURE_CLIENT_ID }}"
 
     - name: Create VM
       run: |
