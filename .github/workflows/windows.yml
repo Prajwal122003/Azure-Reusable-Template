@@ -28,7 +28,7 @@ jobs:
       run: |
         az group create --name github-vm-rg --location eastus
         az vm create \
-          --resource-group github-vm-rg1 \
+          --resource-group github-vm-rg \
           --name github-vm \
           --image Win2022Datacenter \
           --admin-username azureuser \
