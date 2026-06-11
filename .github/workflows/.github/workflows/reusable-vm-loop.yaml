@@ -1,0 +1,197 @@
+name: 'DeployVM-ReusableWorkflow'
+on:
+  workflow_call:
+    inputs: 
+      branchname:
+        description: 'branch to use'
+        required: true
+        type: string
+      parametersFile:
+        description: 'parameters File'
+        required: true
+        type: string      
+      env:
+        description: 'environment'
+        required: true
+        type: string
+      azureRegion:
+        description: 'azure Region'
+        required: true
+        type: string
+      resourceGroup:
+        description: 'resource Group'
+        required: true
+        type: string
+      subscription:
+        description: 'Subscription Name'
+        required: true
+        type: string
+      iterationName:
+        description: 'iteration Name'
+        required: true
+        type: string
+    secrets:
+      SUBSCRIPTION_ID:
+        required: true   
+      CLIENT_ID:
+        required: true       
+      TENANT_ID:
+        required: true      
+      TOKEN_REUSABLE_TEMPLATE:
+        required: true
+
+
+permissions:
+  id-token: write
+  contents: read
+      
+env:
+  subscriptionId: ${{ secrets.SUBSCRIPTION_ID }}
+  subscription: ${{ inputs.subscription }}
+  resourceGroup: ${{ inputs.resourceGroup }}
+  azureRegion: ${{ inputs.azureRegion }}
+  templateFile: ./ReusableRepo/VM/templates/vm.bicep
+  parametersFile: ${{ inputs.parametersFile }}
+  parametersReusableFile: ./ReusableRepo/VM/parameters/vm-reusable.parameters.jsonc
+  branchnameToUse: ${{ inputs.branchname}}
+
+jobs:
+  deployment:
+    if: ${{ !contains(inputs.subscription, 'SANDBOX') && !contains(inputs.subscription, 'SBX') }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env }}
+
+    outputs:
+      vm_name: ${{ steps.arm.outputs.vm_name }}
+      vm_id: ${{ steps.arm.outputs.vm_id }}
+      vm_exists: ${{ steps.check_vm.outputs.vm_exists }}
+
+    steps:
+    # log in to Azure using OpenID Connect for deployment
+    - name: 'Login to Azure'
+      uses: azure/login@v3
+      with:
+          client-id: ${{ secrets.CLIENT_ID }}
+          tenant-id: ${{ secrets.TENANT_ID }}
+          subscription-id: ${{ env.subscriptionId }}
+
+    # checkout the repository to the GitHub Actions runner
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        path: CallerRepo
+
+    - name: Checkout BHCAzure_ReusableTemplates repo
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ env.branchnameToUse }}
+        repository: Corporate-Functions/BHCAzure_ReusableTemplates
+        token: ${{ secrets.TOKEN_REUSABLE_TEMPLATE }}
+        path: ReusableRepo
+    
+    - name: Check if VM exists
+      id: check_vm
+      run: |
+        vm_name=$(jq -r '.parameters.vmResourceName.value' ${{ env.parametersFile }})
+        echo "Checking existence of VM: $vm_name"
+        if az vm show --name "$vm_name" --resource-group "${{ env.resourceGroup }}"; then
+          echo "vm_exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "vm_exists=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Read subscription tags
+      id: subscription_date
+      run: |
+        SUB_ID=$(az account show --query id -o tsv)
+        CREATED_DATE=$(az graph query -q "
+        ResourceContainers
+        | where type == 'microsoft.resources/subscriptions'
+        | where subscriptionId == '$SUB_ID'
+        | project CreatedDate = tags['Created_Date']
+        " --query "data[0].CreatedDate" -o tsv)
+    
+        echo "subscriptionCreatedDate=$CREATED_DATE" >> $GITHUB_OUTPUT
+
+    #Deploy ARM template
+    - name: Deploy ARM Template
+      id: arm
+      uses: Azure/arm-deploy@v2
+      with:
+        scope: resourcegroup
+        deploymentName: 'Github.Actions-${{ github.workflow }}-${{ github.run_number }}-${{ inputs.iterationName }}'
+        subscriptionId: ${{ env.subscriptionId }}
+        resourceGroupName: ${{ env.resourceGroup }}
+        region: ${{ env.azureRegion }}
+        template: ${{ env.templateFile }}
+        parameters: ${{ env.parametersFile }}
+          ${{ env.parametersReusableFile }}
+          region=${{ env.azureRegion }}
+          subscriptionName=${{ env.subscription }}
+          subscriptionCreatedDate=${{ steps.subscription_date.outputs.subscriptionCreatedDate }}
+          patToken=${{ secrets.TOKEN_REUSABLE_TEMPLATE }}
+        failOnStderr: false
+
+    - name: Azure CLI script
+      run: |
+        az version
+        az logout
+        az cache purge
+        az account clear
+
+  postAction:
+    runs-on: ubuntu-latest 
+    environment: ${{ inputs.env }}
+    needs: deployment
+
+    steps:
+    # log in to Azure using OpenID Connect for deployment
+    - name: 'Login to Azure'
+      uses: azure/login@v3
+      with:
+          client-id: ${{ secrets.CLIENT_ID }}
+          tenant-id: ${{ secrets.TENANT_ID }}
+          subscription-id: ${{ env.subscriptionId }}
+
+    # checkout the repository to the GitHub Actions runner
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        path: CallerRepo
+
+    - name: Restart VM after Domain Join
+      if: needs.deployment.outputs.vm_exists == 'false'
+      id: restartvm
+      run: |
+           private_Ip=$(az vm show -d -g ${{env.resourceGroup}} -n ${{needs.deployment.outputs.vm_name}} --query privateIps -o tsv)
+           id=$(az vm show -d -g ${{env.resourceGroup}} -n ${{needs.deployment.outputs.vm_name}} --query id -o tsv)
+           osType=$(az vm show -d -g ${{env.resourceGroup}} -n ${{needs.deployment.outputs.vm_name}} --query storageProfile.osDisk.osType -o tsv) 
+           echo $osType
+           if [ $osType == 'Windows' ] ; then az vm update --resource-group ${{env.resourceGroup}} --name ${{needs.deployment.outputs.vm_name}} --set licenseType=Windows_Server ; fi 
+           az tag update --operation Merge --resource-id $id --tags "Private IP"=$private_Ip
+           echo "sleeping for 60s"
+           sleep 60s
+           echo "restarting the VM ${{needs.deployment.outputs.vm_name}}"
+           az vm restart -g ${{env.resourceGroup}} -n ${{needs.deployment.outputs.vm_name}}
+           sleep 120s
+           if [ $osType == "Windows" ] ; then
+              input=$(jq ".parameters.domainJoinGroup.value" ${{ env.parametersFile }} | tr -d [])
+              echo $input
+              for hpaGroup in $input
+              do            
+                  hpaString=$(echo "$hpaGroup" | tr -d '",')
+                  echo "Adding $hpaString to local admin"
+                  az vm run-command invoke -g ${{env.resourceGroup}} -n ${{needs.deployment.outputs.vm_name}} --command-id RunPowerShellScript --scripts "Add-LocalGroupMember -Group Administrators -Member $hpaString"                  
+              done              
+              az vm run-command invoke -g ${{env.resourceGroup}} -n ${{needs.deployment.outputs.vm_name}} --command-id RunPowerShellScript --scripts "Add-LocalGroupMember -Group Administrators -Member BHCAzure_HPA_ALL"              
+              az vm run-command invoke -g ${{env.resourceGroup}} -n ${{needs.deployment.outputs.vm_name}} --command-id RunPowerShellScript --scripts "Add-LocalGroupMember -Group Administrators -Member BHCAzure_SAT_Windows_HPA"
+           else
+              echo "For Linux VMs, the HPA groups are already added to local admin"
+           fi
+
+    - name: Azure CLI script  
+      run: |
+        az version
+        az logout
+        az cache purge
+        az account clear
