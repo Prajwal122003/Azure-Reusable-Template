@@ -1,0 +1,27 @@
+name: 'CallDeployVMLoop'
+
+# Controls when the workflow will run
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+    
+  call-vm-in-local-repo:
+    uses: Corporate-Functions/BHCAzure_ReusableTemplates/.github/workflows/reusable-vm-loop.yaml@v2.2.74
+    with:
+      branchname: master
+      parametersFile: CallerRepo/parameters/vm/vm.parameters.jsonc
+      env: RG-BakerHughes_BHCAzureC-SANDBOX-EastUS-sbx61
+      azureRegion: eastus
+      resourceGroup: RG-BakerHughes_BHCAzureC-SANDBOX-EastUS-sbx61
+      subscription: BH_SANDBOX1
+      iterationName: ${{ matrix.fileList }}
+    secrets:
+      SUBSCRIPTION_ID:  ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      TOKEN_REUSABLE_TEMPLATE: ${{ secrets.TOKEN_REUSABLE_TEMPLATE }}
